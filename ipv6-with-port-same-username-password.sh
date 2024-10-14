@@ -33,7 +33,7 @@ curl -F "file=@proxy.txt" https://file.io
 gen_3proxy() {
     cat <<EOF
 daemon
-maxconn 10000
+maxconn 5000
 nserver 1.1.1.1
 nserver 8.8.4.4
 nserver 2001:4860:4860::8888
