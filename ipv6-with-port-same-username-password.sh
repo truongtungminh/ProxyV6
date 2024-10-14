@@ -62,39 +62,11 @@ EOF
 }
 
 gen_data() {
-    userproxy=$(random)
-    passproxy=$(random)
-    
-    # Kiểm tra các biến đầu vào trước khi bắt đầu vòng lặp
-    if [[ -z "$FIRST_PORT" || -z "$LAST_PORT" || -z "$IP4" || -z "$IP6" ]]; then
-        echo "Error: Missing required environment variables (FIRST_PORT, LAST_PORT, IP4, IP6)."
-        return 1
-    fi
-
-    # Cải thiện tốc độ vòng lặp bằng cách sử dụng while IFS đọc cổng
-    seq $FIRST_PORT $LAST_PORT | while IFS= read -r port; do
-        ip64_value=$(gen64 "$IP6")
-        if [[ -z "$ip64_value" ]]; then
-            echo "Error: Failed to generate IPv6 address."
-            continue
-        fi
-        # Xuất ra định dạng proxy với các giá trị đã kiểm tra
-        echo "$userproxy/$passproxy/$IP4/$port/$ip64_value"
+    userproxy=user
+    passproxy=pass
+    seq $FIRST_PORT $LAST_PORT | while read port; do
+        echo "$userproxy/$passproxy/$IP4/$port/$(gen64 $IP6)"
     done
-}
-
-# Hàm random đảm bảo chỉ tạo ra chuỗi ký tự hợp lệ
-gen64() {
-    array=(1 2 3 4 5 6 7 8 9 0 a b c d e f)
-    ip64() {
-        echo "${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}"
-    }
-    echo "$1:$(ip64):$(ip64):$(ip64):$(ip64)"
-}
-
-# Hàm random cải tiến
-random() {
-    tr </dev/urandom -dc A-Za-z0-9 | head -c8
 }
 
 gen_iptables() {
