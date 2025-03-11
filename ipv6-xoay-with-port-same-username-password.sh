@@ -1,6 +1,9 @@
 #!/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
+# Định nghĩa WORKDIR sớm để sử dụng trong các hàm khác
+WORKDIR="/home/cloudfly"
+
 random() {
     tr </dev/urandom -dc A-Za-z0-9 | head -c12
     echo
@@ -16,17 +19,15 @@ gen64() {
 }
 
 install_3proxy() {
-    echo "installing 3proxy"
+    echo "Installing 3proxy..."
     URL="https://github.com/z3APA3A/3proxy/archive/3proxy-0.8.6.tar.gz"
     wget -qO- $URL | bsdtar -xvf-
-    cd 3proxy-3proxy-0.8.6
+    cd 3proxy-3proxy-0.8.6 || { echo "Directory not found"; exit 1; }
     make -f Makefile.Linux
-    mkdir -p /usr/local/etc/3proxy/{bin,logs,stat}
+    mkdir -p /usr/local/etc/3proxy/{bin,logs,stat} || { echo "Cannot create /usr/local/etc/3proxy folders"; exit 1; }
     cp src/3proxy /usr/local/etc/3proxy/bin/
-    cd $WORKDIR
+    cd "$WORKDIR"
 }
-
-download_proxy
 
 gen_3proxy() {
     cat <<EOF
@@ -69,7 +70,7 @@ gen_data() {
 
 gen_iptables() {
     cat <<EOF
-$(awk -F "/" '{print "iptables -I INPUT -p tcp --dport " $4 "  -m state --state NEW -j ACCEPT"}' ${WORKDATA}) 
+$(awk -F "/" '{print "iptables -I INPUT -p tcp --dport " $4 " -m state --state NEW -j ACCEPT"}' ${WORKDATA})
 EOF
 }
 
@@ -79,34 +80,33 @@ $(awk -F "/" '{print "ifconfig eth0 inet6 add " $5 "/64"}' ${WORKDATA})
 EOF
 }
 
-echo "installing apps"
+echo "Installing required apps..."
 yum -y install wget gcc net-tools bsdtar zip >/dev/null
 
-cat << EOF > /etc/rc.d/rc.local
+# Tạo file /etc/rc.d/rc.local nếu chưa tồn tại
+cat << 'EOF' > /etc/rc.d/rc.local
 #!/bin/bash
 touch /var/lock/subsys/local
 EOF
-
-echo "installing apps"
-yum -y install wget gcc net-tools bsdtar zip >/dev/null
+chmod +x /etc/rc.d/rc.local
 
 install_3proxy
 
-echo "working folder = /home/cloudfly"
-WORKDIR="/home/cloudfly"
+echo "Working folder = $WORKDIR"
 WORKDATA="${WORKDIR}/data.txt"
-mkdir -p $WORKDIR && cd $WORKDIR
+mkdir -p "$WORKDIR" || { echo "Cannot create $WORKDIR"; exit 1; }
+cd "$WORKDIR" || exit 1
 
 IP4=$(curl -4 -s icanhazip.com)
 # Lấy phần đầu của IPv6 làm sub (ví dụ: 2407:5b40:0:240)
 IP6=$(curl -6 -s icanhazip.com | cut -f1-4 -d':')
 
-echo "Internal ip = ${IP4}. External sub for ip6 = ${IP6}"
+echo "Internal IP = ${IP4}. External sub for IPv6 = ${IP6}"
 
 while :; do
   read -p "Enter FIRST_PORT between 21000 and 61000: " FIRST_PORT
   [[ $FIRST_PORT =~ ^[0-9]+$ ]] || { echo "Enter a valid number"; continue; }
-  if ((FIRST_PORT >= 21000 && FIRST_PORT <= 61000)); then
+  if [ $FIRST_PORT -ge 21000 ] && [ $FIRST_PORT -le 61000 ]; then
     echo "OK! Valid number"
     break
   else
@@ -116,12 +116,12 @@ done
 LAST_PORT=$(($FIRST_PORT + 500))
 echo "LAST_PORT is $LAST_PORT. Continue..."
 
-gen_data >$WORKDIR/data.txt
-gen_iptables >$WORKDIR/boot_iptables.sh
-gen_ifconfig >$WORKDIR/boot_ifconfig.sh
-chmod +x ${WORKDIR}/boot_*.sh /etc/rc.d/rc.local
+gen_data >"$WORKDIR/data.txt"
+gen_iptables >"$WORKDIR/boot_iptables.sh"
+gen_ifconfig >"$WORKDIR/boot_ifconfig.sh"
+chmod +x "$WORKDIR"/boot_*.sh /etc/rc.d/rc.local
 
-gen_3proxy >/usr/local/etc/3proxy/3proxy.cfg
+gen_3proxy > /usr/local/etc/3proxy/3proxy.cfg
 
 cat >>/etc/rc.d/rc.local <<EOF
 bash ${WORKDIR}/boot_iptables.sh
@@ -135,10 +135,10 @@ bash /etc/rc.d/rc.local
 gen_proxy_file_for_user
 
 #############################
-# Phần bổ sung xoay proxy V6 mỗi 5 phút
+# Phần bổ sung xoay proxy IPv6 mỗi 5 phút
 #############################
-# Tạo file cấu hình chứa các biến cần thiết cho rotate
-cat <<EOF > ${WORKDIR}/proxy_config.env
+# Tạo file chứa các biến cấu hình cần thiết cho rotate
+cat <<EOF > "${WORKDIR}/proxy_config.env"
 export FIRST_PORT=${FIRST_PORT}
 export LAST_PORT=${LAST_PORT}
 export IP4=${IP4}
@@ -146,7 +146,7 @@ export IP6=${IP6}
 EOF
 
 # Tạo script rotate_proxy.sh để cập nhật proxy IPv6
-cat << 'EOF' > ${WORKDIR}/rotate_proxy.sh
+cat << 'EOF' > "${WORKDIR}/rotate_proxy.sh"
 #!/bin/sh
 WORKDIR="/home/cloudfly"
 # Nạp các biến cấu hình
@@ -184,7 +184,7 @@ maxconn 2000
 nserver 1.1.1.1
 nserver 8.8.4.4
 nserver 2001:4860:4860::8888
-nserver:2001:4860:4860::8844
+nserver 2001:4860:4860::8844
 nscache 65536
 timeouts 1 5 30 60 180 1800 15 60
 setgid 65535
@@ -210,7 +210,7 @@ pkill 3proxy
 /usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg &
 EOF
 
-chmod +x ${WORKDIR}/rotate_proxy.sh
+chmod +x "${WORKDIR}/rotate_proxy.sh"
 
 # Thêm cron job để chạy rotate_proxy.sh mỗi 5 phút
 (crontab -l 2>/dev/null; echo "*/5 * * * * bash ${WORKDIR}/rotate_proxy.sh") | crontab -
