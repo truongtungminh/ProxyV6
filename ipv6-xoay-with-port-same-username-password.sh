@@ -134,9 +134,6 @@ bash /etc/rc.d/rc.local
 
 gen_proxy_file_for_user
 
-echo "Starting Proxy"
-download_proxy
-
 #############################
 # Phần bổ sung xoay proxy V6 mỗi 5 phút
 #############################
