@@ -1,35 +1,36 @@
 #!/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
+# Đặt biến WORKDIR ngay từ đầu và tạo thư mục nếu chưa tồn tại
+WORKDIR="/home/cloudfly"
+mkdir -p "$WORKDIR" || { echo "Cannot create $WORKDIR"; exit 1; }
+
 random() {
-	tr </dev/urandom -dc A-Za-z0-9 | head -c12
-	echo
+    tr </dev/urandom -dc A-Za-z0-9 | head -c12
+    echo
 }
 
 array=(1 2 3 4 5 6 7 8 9 0 a b c d e f)
 gen64() {
-	ip64() {
-		echo "${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}"
-	}
-	echo "$1:$(ip64):$(ip64):$(ip64):$(ip64)"
+    ip64() {
+        echo "${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}"
+    }
+    # Ghép chuỗi với $IP6 (là phần sub của IPv6 lấy từ icanhazip.com)
+    echo "$IP6:$(ip64):$(ip64):$(ip64):$(ip64)"
 }
+
 install_3proxy() {
-    echo "installing 3proxy"
+    echo "Installing 3proxy..."
     URL="https://github.com/z3APA3A/3proxy/archive/3proxy-0.8.6.tar.gz"
     wget -qO- $URL | bsdtar -xvf-
-    cd 3proxy-3proxy-0.8.6
+    cd 3proxy-3proxy-0.8.6 || { echo "Directory not found"; exit 1; }
     make -f Makefile.Linux
-    mkdir -p /usr/local/etc/3proxy/{bin,logs,stat}
+    mkdir -p /usr/local/etc/3proxy/{bin,logs,stat} || { echo "Cannot create /usr/local/etc/3proxy folders"; exit 1; }
     cp src/3proxy /usr/local/etc/3proxy/bin/
-    #cp ./scripts/rc.d/proxy.sh /etc/init.d/3proxy
-    #chmod +x /etc/init.d/3proxy
-    #chkconfig 3proxy on
-    cd $WORKDIR
+    # Quay trở lại WORKDIR
+    cd "$WORKDIR" || exit 1
 }
-download_proxy() {
-cd /home/cloudfly
-curl -F "file=@proxy.txt" https://file.io
-}
+
 gen_3proxy() {
     cat <<EOF
 daemon
@@ -65,13 +66,13 @@ gen_data() {
     userproxy=user
     passproxy=pass
     seq $FIRST_PORT $LAST_PORT | while read port; do
-        echo "$userproxy/$passproxy/$IP4/$port/$(gen64 $IP6)"
+        echo "$userproxy/$passproxy/$IP4/$port/$(gen64)"
     done
 }
 
 gen_iptables() {
     cat <<EOF
-    $(awk -F "/" '{print "iptables -I INPUT -p tcp --dport " $4 "  -m state --state NEW -j ACCEPT"}' ${WORKDATA}) 
+$(awk -F "/" '{print "iptables -I INPUT -p tcp --dport " $4 " -m state --state NEW -j ACCEPT"}' ${WORKDATA})
 EOF
 }
 
@@ -80,59 +81,139 @@ gen_ifconfig() {
 $(awk -F "/" '{print "ifconfig eth0 inet6 add " $5 "/64"}' ${WORKDATA})
 EOF
 }
-echo "installing apps"
+
+echo "Installing required apps..."
 yum -y install wget gcc net-tools bsdtar zip >/dev/null
 
-cat << EOF > /etc/rc.d/rc.local
+# Tạo file /etc/rc.d/rc.local nếu chưa tồn tại và cấp quyền thực thi
+cat << 'EOF' > /etc/rc.d/rc.local
 #!/bin/bash
 touch /var/lock/subsys/local
 EOF
-
-echo "installing apps"
-yum -y install wget gcc net-tools bsdtar zip >/dev/null
+chmod +x /etc/rc.d/rc.local
 
 install_3proxy
 
-echo "working folder = /home/cloudfly"
-WORKDIR="/home/cloudfly"
+echo "Working folder = $WORKDIR"
 WORKDATA="${WORKDIR}/data.txt"
-mkdir $WORKDIR && cd $_
+cd "$WORKDIR" || exit 1
 
 IP4=$(curl -4 -s icanhazip.com)
+# Lấy phần đầu của IPv6 làm sub (ví dụ: 2407:5b40:0:106)
 IP6=$(curl -6 -s icanhazip.com | cut -f1-4 -d':')
 
-echo "Internal ip = ${IP4}. Exteranl sub for ip6 = ${IP6}"
+echo "Internal IP = ${IP4}. External sub for IPv6 = ${IP6}"
 
 while :; do
   read -p "Enter FIRST_PORT between 21000 and 61000: " FIRST_PORT
   [[ $FIRST_PORT =~ ^[0-9]+$ ]] || { echo "Enter a valid number"; continue; }
-  if ((FIRST_PORT >= 21000 && FIRST_PORT <= 61000)); then
+  if [ $FIRST_PORT -ge 21000 ] && [ $FIRST_PORT -le 61000 ]; then
     echo "OK! Valid number"
     break
   else
     echo "Number out of range, try again"
   fi
 done
-LAST_PORT=$(($FIRST_PORT + 2000))
+LAST_PORT=$(($FIRST_PORT + 500))
 echo "LAST_PORT is $LAST_PORT. Continue..."
 
-gen_data >$WORKDIR/data.txt
-gen_iptables >$WORKDIR/boot_iptables.sh
-gen_ifconfig >$WORKDIR/boot_ifconfig.sh
-chmod +x boot_*.sh /etc/rc.local
+gen_data >"$WORKDIR/data.txt"
+gen_iptables >"$WORKDIR/boot_iptables.sh"
+gen_ifconfig >"$WORKDIR/boot_ifconfig.sh"
+chmod +x "$WORKDIR"/boot_*.sh /etc/rc.d/rc.local
 
-gen_3proxy >/usr/local/etc/3proxy/3proxy.cfg
+gen_3proxy > /usr/local/etc/3proxy/3proxy.cfg
 
-cat >>/etc/rc.local <<EOF
+cat >>/etc/rc.d/rc.local <<EOF
 bash ${WORKDIR}/boot_iptables.sh
 bash ${WORKDIR}/boot_ifconfig.sh
 ulimit -n 1000048
 /usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg
 EOF
-chmod 0755 /etc/rc.local
-bash /etc/rc.local
+chmod 0755 /etc/rc.d/rc.local
+bash /etc/rc.d/rc.local
 
 gen_proxy_file_for_user
 
-echo "Starting Proxy"
-download_proxy
+#############################
+# Phần bổ sung xoay proxy IPv6 mỗi 5 phút
+#############################
+# Tạo file chứa các biến cấu hình cần thiết cho rotate
+cat <<EOF > "${WORKDIR}/proxy_config.env"
+export FIRST_PORT=${FIRST_PORT}
+export LAST_PORT=${LAST_PORT}
+export IP4=${IP4}
+export IP6=${IP6}
+EOF
+
+# Tạo script rotate_proxy.sh để cập nhật proxy IPv6
+cat << 'EOF' > "${WORKDIR}/rotate_proxy.sh"
+#!/bin/sh
+WORKDIR="/home/cloudfly"
+# Nạp các biến cấu hình
+if [ -f ${WORKDIR}/proxy_config.env ]; then
+  . ${WORKDIR}/proxy_config.env
+fi
+
+# Định nghĩa lại hàm gen64 cho rotate (sử dụng IP6 đã được export)
+array=(1 2 3 4 5 6 7 8 9 0 a b c d e f)
+gen64() {
+    ip64() {
+        echo "${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}"
+    }
+    echo "$IP6:$(ip64):$(ip64):$(ip64):$(ip64)"
+}
+
+# Hàm gen_data dùng để tạo dữ liệu proxy mới
+gen_data() {
+    userproxy=user
+    passproxy=pass
+    seq $FIRST_PORT $LAST_PORT | while read port; do
+        echo "$userproxy/$passproxy/$IP4/$port/$(gen64)"
+    done
+}
+
+# Hàm gen_ifconfig: tạo lệnh thêm địa chỉ IPv6
+gen_ifconfig() {
+    awk -F "/" '{print "ifconfig eth0 inet6 add " $5 "/64"}' ${WORKDIR}/data.txt
+}
+
+# Hàm gen_3proxy: tạo file cấu hình cho 3proxy
+gen_3proxy() {
+    echo "daemon
+maxconn 2000
+nserver 1.1.1.1
+nserver 8.8.4.4
+nserver 2001:4860:4860::8888
+nserver 2001:4860:4860::8844
+nscache 65536
+timeouts 1 5 30 60 180 1800 15 60
+setgid 65535
+setuid 65535
+stacksize 6291456 
+flush
+auth strong
+users user:CL:pass
+" 
+    awk -F "/" '{print "auth strong\nallow " $1 "\nproxy -6 -n -a -p" $4 " -i" $3 " -e"$5"\nflush"}' ${WORKDIR}/data.txt
+}
+
+# Tạo lại file dữ liệu proxy mới
+gen_data > ${WORKDIR}/data.txt
+# Cập nhật lại cấu hình IPv6 trên giao diện: xóa các địa chỉ cũ và thêm mới
+ip -6 addr flush dev eth0
+gen_ifconfig > ${WORKDIR}/boot_ifconfig.sh
+bash ${WORKDIR}/boot_ifconfig.sh
+# Tạo lại file cấu hình 3proxy
+gen_3proxy > /usr/local/etc/3proxy/3proxy.cfg
+# Khởi động lại 3proxy
+pkill 3proxy
+/usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg &
+EOF
+
+chmod +x "${WORKDIR}/rotate_proxy.sh"
+
+# Thêm cron job để chạy rotate_proxy.sh mỗi 5 phút
+(crontab -l 2>/dev/null; echo "*/5 * * * * bash ${WORKDIR}/rotate_proxy.sh") | crontab -
+
+echo "Cron job for rotating proxy every 5 minutes has been installed."
